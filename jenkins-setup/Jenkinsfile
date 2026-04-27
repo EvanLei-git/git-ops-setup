@@ -8,7 +8,7 @@ pipeline {
 
     environment {
         // Adjust these as needed for your project
-        REPO_URL = "https://github.com/EvanLei-git/argocd-examples.git"
+        APP_REPO_URL = "https://github.com/EvanLei-git/argocd-kustomize-examples.git"
         GIT_CREDS_ID = "git-token" // Required to push back to GitHub
     }
 
@@ -20,28 +20,54 @@ pipeline {
             }
         }
         
+        stage('Checkout Target Repo') {
+            steps {
+                // Jenkins automatically checked out Repo 2. 
+                // Now we explicitly clone Repo 1 into an 'app-repo' folder so we can edit it.
+                dir('app-repo') {
+                    git branch: 'main', url: "${APP_REPO_URL}", credentialsId: "${GIT_CREDS_ID}"
+                }
+            }
+        }
+
+        stage('Inject GitOps Build Tag') {
+            steps {
+                dir('app-repo/examples/overlays/dev') {
+                    // This injects a label (e.g., build-version: testbuild-v0.0.12) into kustomization.yaml
+                    // The '-f' flag forces it to overwrite the label if it already exists from a previous build
+                    sh "${WORKSPACE}/kustomize edit add label build-version:${BUILD_TAG} -f"
+                }
+            }
+        }
+        
         stage('Check Build (CI)') {
             steps {
-                echo 'Running CI tests: Validating Kubernetes manifests...'
-                // Check if the base and overlays can build successfully without errors
-                sh './kustomize build examples/base > /dev/null'
-                sh './kustomize build examples/overlays/dev > /dev/null'
-                echo 'Build check passed successfully!'
+                echo "Validating Kubernetes manifests with new tag: ${BUILD_TAG}..."
+                dir('app-repo') {
+                    sh '${WORKSPACE}/kustomize build examples/base > /dev/null'
+                    sh '${WORKSPACE}/kustomize build examples/overlays/dev > /dev/null'
+                    echo 'Build check passed successfully!'
+                }
             }
         }
         
         stage('Promote to CD (Merge)') {
             steps {
-                echo 'CI passed! Merging kustomize into dev-build branch for ArgoCD to deploy...'
-                withCredentials([usernamePassword(credentialsId: "${GIT_CREDS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
-                    sh '''
-                        # Configure git
-                        git config user.name "Jenkins CI"
-                        git config user.email "ci@jenkins.local"
-                        
-                        # Push the current tested commit directly to the dev-build branch
-                        git push https://${GIT_USER}:${GIT_PASS}@github.com/EvanLei-git/argocd-examples.git HEAD:dev-build
-                    '''
+                echo 'CI passed! Committing changes and pushing to dev-build branch for ArgoCD...'
+                dir('app-repo') {
+                    withCredentials([usernamePassword(credentialsId: "${GIT_CREDS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
+                        sh '''
+                            # Configure Git
+                            git config user.name "Jenkins CI"
+                            git config user.email "ci@jenkins.local"
+                            
+                            # Commit the tag changes made by Kustomize
+                            git commit -am "chore: update dev build tag to ${BUILD_TAG} [skip ci]"
+                            
+                            # Push directly to the dev-build branch
+                            git push https://${GIT_USER}:${GIT_PASS}@github.com/EvanLei-git/argocd-kustomize-examples.git HEAD:dev-build
+                        '''
+                    }
                 }
             }
         }
@@ -49,10 +75,10 @@ pipeline {
     
     post {
         success {
-            echo 'CI Pipeline Succeeded. ArgoCD will now detect the changes and test/sync the deployment automatically.'
+            echo "CI Pipeline Succeeded! Tag ${BUILD_TAG} was pushed. ArgoCD will now detect the changes and sync."
         }
         failure {
-            echo 'CI Pipeline Failed. Please fix the manifest errors before ArgoCD deploys them.'
+            echo 'CI Pipeline Failed. Please fix the manifest errors.'
         }
     }
 }
