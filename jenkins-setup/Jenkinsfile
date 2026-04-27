@@ -1,6 +1,11 @@
 pipeline {
     agent any
 
+    options {
+        // Stop Jenkins from downloading the 'git-ops-setup' repo
+        skipDefaultCheckout()
+    }
+
     triggers {
         // Poll GitHub every 1 minute (since we don't have a public IP for webhooks)
         pollSCM('* * * * *')
@@ -10,30 +15,31 @@ pipeline {
         APP_REPO_URL = "https://github.com/EvanLei-git/argocd-kustomize-examples.git"
         GIT_CREDS_ID = "git-token" 
         
-        // FIX 2: Define a clean build tag without spaces for the Kubernetes label
-        BUILD_TAG = "testbuild-v0.0.1"
+        // Auto-incrementing build tag
+        BUILD_TAG = "testbuild-v0.0.${BUILD_NUMBER}"
     }
 
     stages {
-        stage('Setup Tools') {
+        stage('Setup Tools & Workspace') {
             steps {
+                deleteDir() 
                 sh 'curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash'
             }
         }
         
         stage('Checkout Target Repo') {
             steps {
-                dir('app-repo') {
-                    git branch: 'main', url: "${APP_REPO_URL}", credentialsId: "${GIT_CREDS_ID}"
+                // Clone the 'kustomize' branch directly into the root folder
+                withCredentials([usernamePassword(credentialsId: "${GIT_CREDS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
+                    sh 'git clone -b kustomize https://${GIT_USER}:${GIT_PASS}@github.com/EvanLei-git/argocd-kustomize-examples.git .'
                 }
             }
         }
 
         stage('Inject GitOps Build Tag') {
             steps {
-                dir('app-repo/examples/overlays/dev') {
-                    // FIX 1: Wrapped the workspace path in escaped quotes so spaces don't break the command
-                    sh "\"${WORKSPACE}/kustomize\" edit add label build-version:${BUILD_TAG} -f"
+                dir('examples/overlays/dev') {
+                    sh "\"${WORKSPACE}/kustomize\" edit add label build-version:${BUILD_TAG} --force"
                 }
             }
         }
@@ -41,28 +47,29 @@ pipeline {
         stage('Check Build (CI)') {
             steps {
                 echo "Validating Kubernetes manifests with new tag: ${BUILD_TAG}..."
-                dir('app-repo') {
-                    // FIX 1: Fixed the quotes here as well
-                    sh "\"${WORKSPACE}/kustomize\" build examples/base > /dev/null"
-                    sh "\"${WORKSPACE}/kustomize\" build examples/overlays/dev > /dev/null"
-                    echo 'Build check passed successfully!'
-                }
+                
+                // If either of these fail, Jenkins stops immediately and goes to the 'failure' block at the bottom
+                sh "\"${WORKSPACE}/kustomize\" build examples/base > /dev/null"
+                sh "\"${WORKSPACE}/kustomize\" build examples/overlays/dev > /dev/null"
+                
+                echo 'Build check passed successfully!'
             }
         }
         
-        stage('Promote to CD (Merge)') {
+        stage('Update Manifests (GitOps Push)') {
             steps {
-                echo 'CI passed! Committing changes and pushing to dev-build branch for ArgoCD...'
-                dir('app-repo') {
-                    withCredentials([usernamePassword(credentialsId: "${GIT_CREDS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
-                        sh '''
-                            git config user.name "Jenkins CI"
-                            git config user.email "ci@jenkins.local"
-                            
-                            git commit -am "chore: update dev build tag to ${BUILD_TAG} [skip ci]"
-                            git push https://${GIT_USER}:${GIT_PASS}@github.com/EvanLei-git/argocd-kustomize-examples.git HEAD:dev-build
-                        '''
-                    }
+                echo 'CI passed! Committing the new tag and pushing directly back to the kustomize branch...'
+                withCredentials([usernamePassword(credentialsId: "${GIT_CREDS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
+                    sh '''
+                        git config user.name "Jenkins CI"
+                        git config user.email "ci@jenkins.local"
+                        
+                        # Commit the change. The [skip ci] prevents Jenkins from going into an infinite loop if it's polling this branch!
+                        git commit -am "chore: update dev build tag to ${BUILD_TAG} [skip ci]"
+                        
+                        # Push directly to the kustomize branch
+                        git push https://${GIT_USER}:${GIT_PASS}@github.com/EvanLei-git/argocd-kustomize-examples.git HEAD:kustomize
+                    '''
                 }
             }
         }
@@ -70,10 +77,10 @@ pipeline {
     
     post {
         success {
-            echo "CI Pipeline Succeeded! Tag ${BUILD_TAG} was pushed. ArgoCD will now detect the changes and sync."
+            echo "CI Pipeline Succeeded! Tag ${BUILD_TAG} was pushed to the kustomize branch."
         }
         failure {
-            echo 'CI Pipeline Failed. Please fix the manifest errors.'
+            echo 'CI Pipeline Failed. The broken YAML was NOT pushed to GitHub.'
         }
     }
 }
