@@ -7,23 +7,22 @@ pipeline {
     }
 
     environment {
-        // Adjust these as needed for your project
         APP_REPO_URL = "https://github.com/EvanLei-git/argocd-kustomize-examples.git"
-        GIT_CREDS_ID = "git-token" // Required to push back to GitHub
+        GIT_CREDS_ID = "git-token" 
+        
+        // FIX 2: Define a clean build tag without spaces for the Kubernetes label
+        BUILD_TAG = "testbuild-v0.0.1"
     }
 
     stages {
         stage('Setup Tools') {
             steps {
-                // Install kustomize to validate the manifests
                 sh 'curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash'
             }
         }
         
         stage('Checkout Target Repo') {
             steps {
-                // Jenkins automatically checked out Repo 2. 
-                // Now we explicitly clone Repo 1 into an 'app-repo' folder so we can edit it.
                 dir('app-repo') {
                     git branch: 'main', url: "${APP_REPO_URL}", credentialsId: "${GIT_CREDS_ID}"
                 }
@@ -33,9 +32,8 @@ pipeline {
         stage('Inject GitOps Build Tag') {
             steps {
                 dir('app-repo/examples/overlays/dev') {
-                    // This injects a label (e.g., build-version: testbuild-v0.0.12) into kustomization.yaml
-                    // The '-f' flag forces it to overwrite the label if it already exists from a previous build
-                    sh "${WORKSPACE}/kustomize edit add label build-version:${BUILD_TAG} -f"
+                    // FIX 1: Wrapped the workspace path in escaped quotes so spaces don't break the command
+                    sh "\"${WORKSPACE}/kustomize\" edit add label build-version:${BUILD_TAG} -f"
                 }
             }
         }
@@ -44,8 +42,9 @@ pipeline {
             steps {
                 echo "Validating Kubernetes manifests with new tag: ${BUILD_TAG}..."
                 dir('app-repo') {
-                    sh '${WORKSPACE}/kustomize build examples/base > /dev/null'
-                    sh '${WORKSPACE}/kustomize build examples/overlays/dev > /dev/null'
+                    // FIX 1: Fixed the quotes here as well
+                    sh "\"${WORKSPACE}/kustomize\" build examples/base > /dev/null"
+                    sh "\"${WORKSPACE}/kustomize\" build examples/overlays/dev > /dev/null"
                     echo 'Build check passed successfully!'
                 }
             }
@@ -57,14 +56,10 @@ pipeline {
                 dir('app-repo') {
                     withCredentials([usernamePassword(credentialsId: "${GIT_CREDS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
                         sh '''
-                            # Configure Git
                             git config user.name "Jenkins CI"
                             git config user.email "ci@jenkins.local"
                             
-                            # Commit the tag changes made by Kustomize
                             git commit -am "chore: update dev build tag to ${BUILD_TAG} [skip ci]"
-                            
-                            # Push directly to the dev-build branch
                             git push https://${GIT_USER}:${GIT_PASS}@github.com/EvanLei-git/argocd-kustomize-examples.git HEAD:dev-build
                         '''
                     }
