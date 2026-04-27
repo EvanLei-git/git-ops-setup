@@ -42,7 +42,8 @@ pipeline {
         stage('Inject GitOps Build Tag') {
             steps {
                 dir('examples/overlays/dev') {
-                    sh "\"${WORKSPACE}/kustomize\" edit add label build-version:${BUILD_TAG} --force"
+                    // --without-selector. This flag tells Kustomize: "Add this label to the pods so ArgoCD can track the new build, but leave the immutable Deployment selectors alone!"
+                    sh "\"${WORKSPACE}/kustomize\" edit add label build-version:${BUILD_TAG} --force --without-selector"
                 }
             }
         }
