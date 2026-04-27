@@ -20,19 +20,22 @@ pipeline {
     }
 
     stages {
-        stage('Setup Tools & Workspace') {
+        stage('Prepare Workspace & Clone') {
             steps {
+                // 1. Wipe the workspace completely clean
                 deleteDir() 
-                sh 'curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash'
-            }
-        }
-        
-        stage('Checkout Target Repo') {
-            steps {
-                // Clone the 'kustomize' branch directly into the root folder
+                
+                // 2. Clone the repo immediately while the folder is perfectly empty!
                 withCredentials([usernamePassword(credentialsId: "${GIT_CREDS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
                     sh 'git clone -b kustomize https://${GIT_USER}:${GIT_PASS}@github.com/EvanLei-git/argocd-kustomize-examples.git .'
                 }
+            }
+        }
+
+        stage('Install Kustomize') {
+            steps {
+                // 3. Now that the repo is downloaded, we can safely drop the kustomize tool into the root folder
+                sh 'curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash'
             }
         }
 
@@ -48,7 +51,6 @@ pipeline {
             steps {
                 echo "Validating Kubernetes manifests with new tag: ${BUILD_TAG}..."
                 
-                // If either of these fail, Jenkins stops immediately and goes to the 'failure' block at the bottom
                 sh "\"${WORKSPACE}/kustomize\" build examples/base > /dev/null"
                 sh "\"${WORKSPACE}/kustomize\" build examples/overlays/dev > /dev/null"
                 
@@ -64,10 +66,7 @@ pipeline {
                         git config user.name "Jenkins CI"
                         git config user.email "ci@jenkins.local"
                         
-                        # Commit the change. The [skip ci] prevents Jenkins from going into an infinite loop if it's polling this branch!
                         git commit -am "chore: update dev build tag to ${BUILD_TAG} [skip ci]"
-                        
-                        # Push directly to the kustomize branch
                         git push https://${GIT_USER}:${GIT_PASS}@github.com/EvanLei-git/argocd-kustomize-examples.git HEAD:kustomize
                     '''
                 }
