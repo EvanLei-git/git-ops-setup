@@ -1,0 +1,69 @@
+# vault-values.yaml
+global:
+  enabled: true
+  # EXTERNAL Vault server (not running in this k8s cluster), 
+  # uncomment and set this to your external Vault address:
+  # externalVaultAddr: "https://vault.my-company.com:8200"
+
+
+# The injector intercepts pod creation and dynamically injects a Vault 
+# sidecar. This is the most popular way to "replace" Kubernetes secrets.
+injector:
+  enabled: true
+  
+  # Run 2+ replicas for High Availability it requires leaderElector
+  replicas: 1 # setting it to 1 for the demo
+  
+  leaderElector:
+    enabled: true
+
+  # Set default resource limits for the injected sidecars
+  agentDefaults:
+    cpuLimit: "500m"
+    cpuRequest: "50m"
+    memLimit: "128Mi"
+    memRequest: "64Mi"
+
+  metrics:
+    enabled: true
+
+# # -------------------------------------------------------------------------
+# # 3. Vault CSI Provider (Alternative)
+# # -------------------------------------------------------------------------
+# # Use this if you prefer mounting secrets as native storage volumes 
+# # using the Kubernetes Secrets Store CSI Driver.
+# csi:
+#   # Note: You must install the Secrets Store CSI Driver in your cluster first
+#   # for this to work.
+#   enabled: true
+
+#   # Enables the Vault Agent sidecar for the CSI provider to automatically 
+#   # handle authentication and token renewals
+#   agent:
+#     enabled: true
+
+# -------------------------------------------------------------------------
+# 4. Vault Server Configuration (If hosting Vault inside Kubernetes)
+# -------------------------------------------------------------------------
+server:
+  # Set to false if you are using an external Vault instance
+  enabled: true
+
+  # Dev/Test mode (Standalone). 
+  # For production, change to 'ha' mode with Raft storage.
+  standalone:
+    enabled: true
+    config: |
+      ui = true
+      listener "tcp" {
+        tls_disable = 1
+        address = "[::]:8200"
+        cluster_address = "[::]:8201"
+      }
+      storage "file" {
+        path = "/vault/data"
+      }
+
+  # Enable the Vault UI
+  ui:
+    enabled: true
