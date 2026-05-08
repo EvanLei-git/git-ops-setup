@@ -61,6 +61,20 @@ repoServer:
   autoscaling:
     enabled: true
     minReplicas: 1
+  volumes:
+    - name: netbird-config
+      persistentVolumeClaim:
+        claimName: netbird-config-pvc
+  extraContainers:
+    - name: netbird
+      image: netbirdio/netbird:latest
+      securityContext:
+        capabilities:
+          add: 
+            - NET_ADMIN
+      volumeMounts:
+        - name: netbird-config
+          mountPath: /etc/netbird
 
 applicationSet:
   replicas: 1
