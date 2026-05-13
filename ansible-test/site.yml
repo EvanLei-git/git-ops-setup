@@ -1,0 +1,6 @@
+---
+- name: Verify and self-heal Kubernetes Infrastructure
+  hosts: localhost
+  gather_facts: yes
+  roles:
+    - mariadb_checks

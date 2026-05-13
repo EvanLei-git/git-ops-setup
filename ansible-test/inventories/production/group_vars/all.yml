@@ -1,0 +1,4 @@
+---
+k8s_context: microk8s
+k8s_namespace: wordpress
+pvc_name: mariadb-pvc

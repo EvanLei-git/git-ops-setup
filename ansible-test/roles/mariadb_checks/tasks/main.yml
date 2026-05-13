@@ -1,0 +1,83 @@
+---
+- name: Get information about the MariaDB PVC
+  kubernetes.core.k8s_info:
+    kind: PersistentVolumeClaim
+    name: "{{ pvc_name }}"
+    namespace: "{{ k8s_namespace }}"
+    context: "{{ k8s_context }}"
+  register: pvc_info
+
+- name: Check PVC Status
+  set_fact:
+    pvc_is_bound: "{{ (pvc_info.resources | length > 0) and (pvc_info.resources[0].status.phase == 'Bound') }}"
+
+- name: Print PVC Status
+  debug:
+    msg: "PVC is Bound: {{ pvc_is_bound }}"
+
+- name: Restore from latest backup if PVC is not bound
+  when: not pvc_is_bound
+  block:
+    - name: Ensure MariaDB pod is running
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ k8s_namespace }}"
+        label_selectors:
+          - app=mariadb
+      register: mariadb_pod
+      until: >
+        (mariadb_pod.resources | length > 0) and
+        (mariadb_pod.resources[0].status.phase == 'Running')
+      retries: 30
+      delay: 10
+
+    - name: Deploy a Kubernetes Job to restore the latest backup
+      kubernetes.core.k8s:
+        state: present
+        context: "{{ k8s_context }}"
+        definition:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: "mariadb-restore-job-{{ ansible_date_time.epoch }}"
+            namespace: "{{ k8s_namespace }}"
+          spec:
+            ttlSecondsAfterFinished: 600
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: restore
+                    image: mariadb
+                    command:
+                      - /bin/bash
+                      - -c
+                      - |
+                        set -euo pipefail
+                        echo "🔍 Finding latest backup..."
+                        LATEST_BACKUP=$(ls -1d /backups/mariadb_backup_* 2>/dev/null | sort | tail -n 1)
+                        
+                        if [ -z "$LATEST_BACKUP" ]; then
+                          echo "❌ No backup found in /backups to restore from!"
+                          exit 1
+                        fi
+                        
+                        echo "✅ Found latest backup: $LATEST_BACKUP"
+                        echo "🚀 Restoring database..."
+                        
+                        mariadb -h mariadb-service -u root -p"$MYSQL_ROOT_PASSWORD" < "$LATEST_BACKUP/database.sql"
+                        
+                        echo "🎉 Restore complete!"
+                    env:
+                      - name: MYSQL_ROOT_PASSWORD
+                        valueFrom:
+                          secretKeyRef:
+                            name: mariadb-credentials
+                            key: MYSQL_ROOT_PASSWORD
+                    volumeMounts:
+                      - name: backup-storage
+                        mountPath: /backups
+                volumes:
+                  - name: backup-storage
+                    persistentVolumeClaim:
+                      claimName: mariadb-backup-pvc
